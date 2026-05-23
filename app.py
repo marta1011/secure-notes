@@ -1,9 +1,16 @@
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 from flask import Flask, request, jsonify, session
 import logging
 import os
 import time
 
 app = Flask(__name__)
+limiter = Limiter(
+    get_remote_address,
+    app=app,
+    default_limits=["50 per minute"]
+)
 app.secret_key = os.environ.get("SECRET_KEY", "dev-secret-key")
 
 logging.basicConfig(level=logging.INFO)
@@ -36,6 +43,7 @@ def health():
 
 
 @app.route("/login", methods=["POST"])
+@limiter.limit("5 per minute")
 def login():
     ip = request.remote_addr
     now = time.time()
