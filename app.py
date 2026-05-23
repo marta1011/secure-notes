@@ -1,19 +1,19 @@
+from flask import Flask, request, jsonify, session
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
-from flask import Flask, request, jsonify, session
 import logging
 import os
-import time
 
 app = Flask(__name__)
+app.secret_key = os.environ.get("SECRET_KEY", "dev-secret-key")
+
+logging.basicConfig(level=logging.INFO)
+
 limiter = Limiter(
     get_remote_address,
     app=app,
     default_limits=["50 per minute"]
 )
-app.secret_key = os.environ.get("SECRET_KEY", "dev-secret-key")
-
-logging.basicConfig(level=logging.INFO)
 
 USERS = {
     "user": {"password": "user123", "role": "user"},
@@ -25,7 +25,14 @@ NOTES = {
     "admin": ["Admin note: sensitive system data"]
 }
 
-login_attempts = {}
+
+@app.after_request
+def add_security_headers(response):
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Content-Security-Policy"] = "default-src 'self'"
+    response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    return response
 
 
 @app.route("/")
@@ -33,6 +40,7 @@ def home():
     return jsonify({
         "app": "Secure Notes",
         "status": "running",
+        "security": "enabled",
         "endpoints": ["/login", "/data", "/admin", "/logout", "/health"]
     })
 
@@ -45,27 +53,16 @@ def health():
 @app.route("/login", methods=["POST"])
 @limiter.limit("5 per minute")
 def login():
-    ip = request.remote_addr
-    now = time.time()
-
-    attempts = login_attempts.get(ip, [])
-    attempts = [t for t in attempts if now - t < 60]
-    login_attempts[ip] = attempts
-
-    if len(attempts) >= 5:
-        logging.warning(f"RATE_LIMIT ip={ip}")
-        return jsonify({"error": "Too many login attempts"}), 429
-
     data = request.get_json() or {}
     username = data.get("username")
     password = data.get("password")
+    ip = request.remote_addr
 
     logging.info(f"LOGIN_ATTEMPT user={username} ip={ip}")
 
     user = USERS.get(username)
 
     if not user or user["password"] != password:
-        login_attempts[ip].append(now)
         logging.warning(f"LOGIN_FAILED user={username} ip={ip}")
         return jsonify({"error": "Invalid credentials"}), 401
 
@@ -114,6 +111,12 @@ def admin():
 def logout():
     session.clear()
     return jsonify({"message": "Logged out"})
+
+
+@app.errorhandler(429)
+def ratelimit_handler(e):
+    logging.warning(f"RATE_LIMIT ip={request.remote_addr}")
+    return jsonify({"error": "Too many requests"}), 429
 
 
 if __name__ == "__main__":
